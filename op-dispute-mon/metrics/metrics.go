@@ -5,6 +5,7 @@ import (
 	"io"
 	"math/big"
 
+	contractMetrics "github.com/ethereum-optimism/optimism/op-challenger/game/fault/contracts/metrics"
 	"github.com/ethereum-optimism/optimism/op-service/sources/caching"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -38,6 +39,8 @@ type Metricer interface {
 	RecordInfo(version string)
 	RecordUp()
 
+	RecordWithdrawalRequests(delayedWeth common.Address, matches bool, count int)
+
 	RecordClaimResolutionDelayMax(delay float64)
 
 	RecordOutputFetchTime(timestamp float64)
@@ -47,6 +50,7 @@ type Metricer interface {
 	RecordBondCollateral(addr common.Address, required *big.Int, available *big.Int)
 
 	caching.Metrics
+	contractMetrics.ContractMetricer
 }
 
 // Metrics implementation must implement RegistryMetricer to allow the metrics server to work.
@@ -58,6 +62,9 @@ type Metrics struct {
 	factory  opmetrics.Factory
 
 	*opmetrics.CacheMetrics
+	*contractMetrics.ContractMetrics
+
+	withdrawalRequests prometheus.GaugeVec
 
 	info prometheus.GaugeVec
 	up   prometheus.Gauge
@@ -87,7 +94,8 @@ func NewMetrics() *Metrics {
 		registry: registry,
 		factory:  factory,
 
-		CacheMetrics: opmetrics.NewCacheMetrics(factory, Namespace, "provider_cache", "Provider cache"),
+		CacheMetrics:    opmetrics.NewCacheMetrics(factory, Namespace, "provider_cache", "Provider cache"),
+		ContractMetrics: contractMetrics.MakeContractMetrics(Namespace, factory),
 
 		info: *factory.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: Namespace,
@@ -110,6 +118,14 @@ func NewMetrics() *Metrics {
 			Namespace: Namespace,
 			Name:      "claim_resolution_delay_max",
 			Help:      "Maximum claim resolution delay in seconds",
+		}),
+		withdrawalRequests: *factory.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Name:      "withdrawal_requests",
+			Help:      "Number of withdrawal requests categorised by the source DelayedWETH contract and whether the withdrawal request amount matches or diverges from its fault dispute game credits",
+		}, []string{
+			"delayedWETH",
+			"credits",
 		}),
 		gamesAgreement: *factory.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: Namespace,
@@ -166,6 +182,14 @@ func (m *Metrics) RecordInfo(version string) {
 func (m *Metrics) RecordUp() {
 	prometheus.MustRegister()
 	m.up.Set(1)
+}
+
+func (m *Metrics) RecordWithdrawalRequests(delayedWeth common.Address, matches bool, count int) {
+	credits := "matching"
+	if !matches {
+		credits = "divergent"
+	}
+	m.withdrawalRequests.WithLabelValues(delayedWeth.Hex(), credits).Set(float64(count))
 }
 
 func (m *Metrics) RecordClaimResolutionDelayMax(delay float64) {

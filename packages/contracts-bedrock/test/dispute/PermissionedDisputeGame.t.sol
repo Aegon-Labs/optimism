@@ -39,15 +39,7 @@ contract PermissionedDisputeGame_Init is DisputeGameFactory_Init {
 
     event Move(uint256 indexed parentIndex, Claim indexed pivot, address indexed claimant);
 
-    function init(
-        Claim rootClaim,
-        Claim absolutePrestate,
-        uint256 l2BlockNumber,
-        uint256 genesisBlockNumber,
-        Hash genesisOutputRoot
-    )
-        public
-    {
+    function init(Claim rootClaim, Claim absolutePrestate, uint256 l2BlockNumber) public {
         // Set the time to a realistic date.
         vm.warp(1690906994);
 
@@ -63,13 +55,12 @@ contract PermissionedDisputeGame_Init is DisputeGameFactory_Init {
         gameImpl = new PermissionedDisputeGame({
             _gameType: GAME_TYPE,
             _absolutePrestate: absolutePrestate,
-            _genesisBlockNumber: genesisBlockNumber,
-            _genesisOutputRoot: genesisOutputRoot,
             _maxGameDepth: 2 ** 3,
             _splitDepth: 2 ** 2,
             _gameDuration: Duration.wrap(7 days),
             _vm: _vm,
             _weth: _weth,
+            _anchorStateRegistry: anchorStateRegistry,
             _l2ChainId: 10,
             _proposer: PROPOSER,
             _challenger: CHALLENGER
@@ -84,8 +75,6 @@ contract PermissionedDisputeGame_Init is DisputeGameFactory_Init {
         // Check immutables
         assertEq(gameProxy.gameType().raw(), GAME_TYPE.raw());
         assertEq(gameProxy.absolutePrestate().raw(), absolutePrestate.raw());
-        assertEq(gameProxy.genesisBlockNumber(), genesisBlockNumber);
-        assertEq(gameProxy.genesisOutputRoot().raw(), genesisOutputRoot.raw());
         assertEq(gameProxy.maxGameDepth(), 2 ** 3);
         assertEq(gameProxy.splitDepth(), 2 ** 2);
         assertEq(gameProxy.gameDuration().raw(), 7 days);
@@ -116,13 +105,7 @@ contract PermissionedDisputeGame_Test is PermissionedDisputeGame_Init {
         absolutePrestate = _changeClaimStatus(Claim.wrap(keccak256(absolutePrestateData)), VMStatuses.UNFINISHED);
 
         super.setUp();
-        super.init({
-            rootClaim: ROOT_CLAIM,
-            absolutePrestate: absolutePrestate,
-            l2BlockNumber: 0x10,
-            genesisBlockNumber: 0,
-            genesisOutputRoot: Hash.wrap(bytes32(0))
-        });
+        super.init({ rootClaim: ROOT_CLAIM, absolutePrestate: absolutePrestate, l2BlockNumber: 0x10 });
     }
 
     /// @dev Tests that the proposer can create a permissioned dispute game.
@@ -143,20 +126,30 @@ contract PermissionedDisputeGame_Test is PermissionedDisputeGame_Init {
     /// @dev Tests that the challenger can participate in a permissioned dispute game.
     function test_participateInGame_challenger_succeeds() public {
         vm.startPrank(CHALLENGER, CHALLENGER);
-        vm.deal(CHALLENGER, MIN_BOND * 3);
-        gameProxy.attack{ value: MIN_BOND }(0, Claim.wrap(0));
-        gameProxy.defend{ value: MIN_BOND }(1, Claim.wrap(0));
-        gameProxy.move{ value: MIN_BOND }(2, Claim.wrap(0), true);
+        uint256 firstBond = _getRequiredBond(0);
+        vm.deal(CHALLENGER, firstBond);
+        gameProxy.attack{ value: firstBond }(0, Claim.wrap(0));
+        uint256 secondBond = _getRequiredBond(1);
+        vm.deal(CHALLENGER, secondBond);
+        gameProxy.defend{ value: secondBond }(1, Claim.wrap(0));
+        uint256 thirdBond = _getRequiredBond(2);
+        vm.deal(CHALLENGER, thirdBond);
+        gameProxy.move{ value: thirdBond }(2, Claim.wrap(0), true);
         vm.stopPrank();
     }
 
     /// @dev Tests that the proposer can participate in a permissioned dispute game.
     function test_participateInGame_proposer_succeeds() public {
         vm.startPrank(PROPOSER, PROPOSER);
-        vm.deal(PROPOSER, MIN_BOND * 3);
-        gameProxy.attack{ value: MIN_BOND }(0, Claim.wrap(0));
-        gameProxy.defend{ value: MIN_BOND }(1, Claim.wrap(0));
-        gameProxy.move{ value: MIN_BOND }(2, Claim.wrap(0), true);
+        uint256 firstBond = _getRequiredBond(0);
+        vm.deal(PROPOSER, firstBond);
+        gameProxy.attack{ value: firstBond }(0, Claim.wrap(0));
+        uint256 secondBond = _getRequiredBond(1);
+        vm.deal(PROPOSER, secondBond);
+        gameProxy.defend{ value: secondBond }(1, Claim.wrap(0));
+        uint256 thirdBond = _getRequiredBond(2);
+        vm.deal(PROPOSER, thirdBond);
+        gameProxy.move{ value: thirdBond }(2, Claim.wrap(0), true);
         vm.stopPrank();
     }
 
@@ -173,6 +166,13 @@ contract PermissionedDisputeGame_Test is PermissionedDisputeGame_Init {
         vm.expectRevert(BadAuth.selector);
         gameProxy.move(2, Claim.wrap(0), true);
         vm.stopPrank();
+    }
+
+    /// @dev Helper to get the required bond for the given claim index.
+    function _getRequiredBond(uint256 _claimIndex) internal view returns (uint256 bond_) {
+        (,,,,, Position parent,) = gameProxy.claimData(_claimIndex);
+        Position pos = parent.move(true);
+        bond_ = gameProxy.getRequiredBond(pos);
     }
 }
 
